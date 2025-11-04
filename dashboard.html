@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="https://public-frontend-cos.metadl.com/mgx/img/favicon.png" type="image/png">
+    <title>Dashboard - SocioConnect</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🌐 SocioConnect</h2>
+                <div class="user-info">
+                    <div class="user-avatar">👤</div>
+                    <div class="user-details">
+                        <h3 id="currentUsername">Loading...</h3>
+                        <p id="currentUserLocation">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-btn active" data-section="discover">
+                    🔍 Discover Friends
+                </button>
+                <button class="nav-btn" data-section="friends">
+                    👥 My Friends (<span id="friendsCount">0</span>)
+                </button>
+                <button class="nav-btn" data-section="profile">
+                    ⚙️ Profile Settings
+                </button>
+                <button class="nav-btn logout-btn" id="logoutBtn">
+                    🚪 Logout
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-dashboard">
+            <!-- Discover Section -->
+            <section id="discoverSection" class="dashboard-section active">
+                <div class="section-header">
+                    <h2>Discover New Friends</h2>
+                    <button class="btn btn-primary" id="refreshDiscoverBtn">🔄 Refresh</button>
+                </div>
+                <div class="discover-grid" id="discoverGrid">
+                    <!-- User cards will be populated here -->
+                </div>
+            </section>
+
+            <!-- Friends Section -->
+            <section id="friendsSection" class="dashboard-section">
+                <div class="section-header">
+                    <h2>My Friends</h2>
+                </div>
+                <div class="friends-list" id="friendsList">
+                    <!-- Friends will be populated here -->
+                </div>
+            </section>
+
+            <!-- Profile Section -->
+            <section id="profileSection" class="dashboard-section">
+                <div class="section-header">
+                    <h2>Profile Settings</h2>
+                </div>
+                <div class="profile-form">
+                    <form id="profileUpdateForm">
+                        <div class="input-group">
+                            <label for="profileLocation">Location</label>
+                            <input type="text" id="profileLocation" required>
+                        </div>
+                        <div class="input-group">
+                            <label for="profileInterests">Interests (comma-separated)</label>
+                            <input type="text" id="profileInterests" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update Profile</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+
+        <!-- Chat Panel -->
+        <div class="chat-panel" id="chatPanel">
+            <div class="chat-header">
+                <div class="chat-user-info">
+                    <div class="chat-avatar">👤</div>
+                    <div class="chat-user-details">
+                        <h4 id="chatUsername">Select a friend to chat</h4>
+                        <span class="chat-status" id="chatStatus">offline</span>
+                    </div>
+                </div>
+                <button class="chat-close" id="closeChatBtn">✕</button>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <!-- Messages will be populated here -->
+            </div>
+            <div class="chat-input">
+                <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+                <button id="sendMessageBtn" disabled>Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+    </div>
+
+    <!-- Success Modal -->
+    <div id="successModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Success!</h3>
+            <p id="successMessage"></p>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div id="errorModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Error</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="./chat.js"></script>
+    <script>
+        // Dashboard functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check authentication
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            // Initialize dashboard
+            initializeDashboard();
+            loadUserProfile();
+            loadDiscoverUsers();
+            loadFriends();
+
+            // Navigation
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    if (this.classList.contains('logout-btn')) {
+                        logout();
+                        return;
+                    }
+
+                    const section = this.dataset.section;
+                    showSection(section);
+                    
+                    // Update active nav
+                    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                });
+            });
+
+            // Refresh discover
+            document.getElementById('refreshDiscoverBtn').addEventListener('click', loadDiscoverUsers);
+
+            // Profile update
+            document.getElementById('profileUpdateForm').addEventListener('submit', updateProfile);
+        });
+
+        async function initializeDashboard() {
+            try {
+                const response = await fetch('/api/user/profile', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+
+                if (response.ok) {
+                    const user = await response.json();
+                    document.getElementById('currentUsername').textContent = user.username;
+                    document.getElementById('currentUserLocation').textContent = user.location;
+                } else {
+                    throw new Error('Failed to load user profile');
+                }
+            } catch (error) {
+                console.error('Error initializing dashboard:', error);
+                showError('Failed to load dashboard');
+            }
+        }
+
+        async function loadUserProfile() {
+            try {
+                const response = await fetch('/api/user/profile', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+
+                if (response.ok) {
+                    const user = await response.json();
+                    document.getElementById('profileLocation').value = user.location;
+                    document.getElementById('profileInterests').value = user.interests;
+                }
+            } catch (error) {
+                console.error('Error loading profile:', error);
+            }
+        }
+
+        async function loadDiscoverUsers() {
+            showLoading();
+            try {
+                const response = await fetch('/api/users/nearby', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+
+                if (response.ok) {
+                    const users = await response.json();
+                    displayDiscoverUsers(users);
+                } else {
+                    throw new Error('Failed to load users');
+                }
+            } catch (error) {
+                console.error('Error loading discover users:', error);
+                showError('Failed to load nearby users');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function displayDiscoverUsers(users) {
+            const grid = document.getElementById('discoverGrid');
+            grid.innerHTML = '';
+
+            if (users.length === 0) {
+                grid.innerHTML = '<p class="no-results">No users found in your area with similar interests.</p>';
+                return;
+            }
+
+            users.forEach(user => {
+                const userCard = document.createElement('div');
+                userCard.className = 'user-card';
+                userCard.innerHTML = `
+                    <div class="user-avatar">👤</div>
+                    <div class="user-info">
+                        <h3>${user.username}</h3>
+                        <p class="user-location">📍 ${user.location}</p>
+                        <p class="user-interests">🎯 ${user.interests}</p>
+                        <div class="user-actions">
+                            <button class="btn btn-primary" onclick="sendFriendRequest(${user.id})">
+                                Add Friend
+                            </button>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(userCard);
+            });
+        }
+
+        async function sendFriendRequest(userId) {
+            try {
+                const response = await fetch('/api/friends/request', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({ friendId: userId })
+                });
+
+                if (response.ok) {
+                    showSuccess('Friend request sent successfully!');
+                    loadDiscoverUsers(); // Refresh the list
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.message || 'Failed to send friend request');
+                }
+            } catch (error) {
+                console.error('Error sending friend request:', error);
+                showError(error.message);
+            }
+        }
+
+        async function loadFriends() {
+            try {
+                const response = await fetch('/api/friends', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+
+                if (response.ok) {
+                    const friends = await response.json();
+                    displayFriends(friends);
+                    document.getElementById('friendsCount').textContent = friends.length;
+                }
+            } catch (error) {
+                console.error('Error loading friends:', error);
+            }
+        }
+
+        function displayFriends(friends) {
+            const friendsList = document.getElementById('friendsList');
+            friendsList.innerHTML = '';
+
+            if (friends.length === 0) {
+                friendsList.innerHTML = '<p class="no-results">No friends yet. Start by discovering new people!</p>';
+                return;
+            }
+
+            friends.forEach(friend => {
+                const friendCard = document.createElement('div');
+                friendCard.className = 'friend-card';
+                friendCard.innerHTML = `
+                    <div class="user-avatar">👤</div>
+                    <div class="friend-info">
+                        <h3>${friend.username}</h3>
+                        <p class="friend-location">📍 ${friend.location}</p>
+                        <p class="friend-interests">🎯 ${friend.interests}</p>
+                    </div>
+                    <div class="friend-actions">
+                        <button class="btn btn-primary" onclick="openChat(${friend.id}, '${friend.username}')">
+                            💬 Chat
+                        </button>
+                    </div>
+                `;
+                friendsList.appendChild(friendCard);
+            });
+        }
+
+        async function updateProfile(e) {
+            e.preventDefault();
+            
+            const location = document.getElementById('profileLocation').value;
+            const interests = document.getElementById('profileInterests').value;
+
+            try {
+                const response = await fetch('/api/user/profile', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({ location, interests })
+                });
+
+                if (response.ok) {
+                    showSuccess('Profile updated successfully!');
+                    loadUserProfile();
+                    document.getElementById('currentUserLocation').textContent = location;
+                } else {
+                    throw new Error('Failed to update profile');
+                }
+            } catch (error) {
+                console.error('Error updating profile:', error);
+                showError('Failed to update profile');
+            }
+        }
+
+        function showSection(sectionName) {
+            document.querySelectorAll('.dashboard-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById(sectionName + 'Section').classList.add('active');
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = 'index.html';
+        }
+
+        function showLoading() {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            document.getElementById('successMessage').textContent = message;
+            document.getElementById('successModal').style.display = 'block';
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorModal').style.display = 'block';
+        }
+
+        // Modal close functionality
+        document.querySelectorAll('.close').forEach(closeBtn => {
+            closeBtn.addEventListener('click', function() {
+                this.closest('.modal').style.display = 'none';
+            });
+        });
+
+        window.addEventListener('click', function(e) {
+            if (e.target.classList.contains('modal')) {
+                e.target.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
